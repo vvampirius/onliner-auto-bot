@@ -37,6 +37,39 @@ func (core *Core) TelegramSend(method string, payload interface{}, onBlocked fun
 	}
 }
 
+// GetNewItems возвращает список новых итемов относительно core.State.LastDate и последнее время побликации из них (если
+// новых нет - будет IsZero).
+func (core *Core) GetNewItems(items []*gofeed.Item) ([]*gofeed.Item, time.Time) {
+	lastDate := core.State.LastDate
+	var newLastDate time.Time
+	newItems := make([]*gofeed.Item, 0)
+	for _, item := range items {
+		if item.PublishedParsed == nil {
+			ErrorLog.Println(`Can't parse`, item.PublishedParsed)
+			continue
+		}
+		if item.PublishedParsed.After(lastDate) {
+			newItems = append(newItems, item)
+			if item.PublishedParsed.After(newLastDate) {
+				newLastDate = *item.PublishedParsed
+			}
+		}
+	}
+	return newItems, newLastDate
+}
+
+func (core *Core) ReverseItems(items []*gofeed.Item) []*gofeed.Item {
+	itemsCount := len(items)
+	if itemsCount <= 1 {
+		return items
+	}
+	newItems := make([]*gofeed.Item, 0)
+	for i := itemsCount - 1; i >= 0; i-- {
+		newItems = append(newItems, items[i])
+	}
+	return newItems
+}
+
 func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
 	DebugLog.Println(r.Method, r.RequestURI, r.UserAgent())
 	if r.Method != http.MethodPost {
@@ -51,24 +84,14 @@ func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		var newLastDate time.Time
-		newItems := 0
-		for _, item := range feed.Items {
-			if item.PublishedParsed == nil {
-				ErrorLog.Println(`Can't parse`, item.PublishedParsed)
-				continue
-			}
-			if item.PublishedParsed.After(core.State.LastDate) {
-				newItems++
-				if item.PublishedParsed.After(newLastDate) {
-					newLastDate = *item.PublishedParsed
-				}
-				core.State.AddCategory(item.Categories...)
-				core.SendItem(item.Title, item.Link, item.Categories)
-			}
+		DebugLog.Println(`Last date:`, core.State.LastDate.Format("02.01 15:04:05 MST"))
+		items, newLastDate := core.GetNewItems(feed.Items)
+		for _, item := range core.ReverseItems(items) {
+			DebugLog.Printf("%s / %v %s %s\n", item.PublishedParsed.Format("02.01 15:04:05 MST"), item.Categories, item.Title, item.Link)
+			core.State.AddCategory(item.Categories...)
+			core.SendItem(item.Title, item.Link, item.Categories)
 		}
-		DebugLog.Printf("Got %d new items\n", newItems)
-		if !newLastDate.IsZero() {
+		if newLastDate.After(core.State.LastDate) {
 			core.State.LastDate = newLastDate
 			if err := core.State.Save(); err != nil {
 				ErrorLog.Println(err.Error())
@@ -121,17 +144,16 @@ func (core *Core) GetUsers() ([]*User, error) {
 }
 
 func (core *Core) SendItem(content, url string, categories []string) {
-	DebugLog.Println(content, url, categories)
 	users, err := core.GetUsers()
 	if err != nil {
 		return
 	}
 	for _, user := range users {
-		DebugLog.Println(user.Info)
 		if user.IsInExcludedCategories(categories...) {
-			DebugLog.Println(`Excluding`)
+			DebugLog.Printf("skip for @%s\n", user.Info.Username)
 			continue
 		}
+		DebugLog.Printf("send to @%s\n", user.Info.Username)
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = user.Id()
 		message.Text = fmt.Sprintf("%v\n%s\n\n%s", categories, content, url)
