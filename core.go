@@ -38,7 +38,7 @@ func (core *Core) TelegramSend(method string, payload interface{}, onBlocked fun
 }
 
 func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
-	DebugLog.Println(r.Method, r.ContentLength, r.RequestURI, r.UserAgent())
+	DebugLog.Println(r.Method, r.RequestURI, r.UserAgent())
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -68,9 +68,11 @@ func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		DebugLog.Printf("Got %d new items\n", newItems)
-		core.State.LastDate = newLastDate
-		if err := core.State.Save(); err != nil {
-			ErrorLog.Println(err.Error())
+		if !newLastDate.IsZero() {
+			core.State.LastDate = newLastDate
+			if err := core.State.Save(); err != nil {
+				ErrorLog.Println(err.Error())
+			}
 		}
 	}()
 }

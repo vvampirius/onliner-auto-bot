@@ -10,7 +10,7 @@ import (
 	"path"
 )
 
-const VERSION = `0.1`
+const VERSION = `0.1.1`
 
 var (
 	ErrorLog = log.New(os.Stderr, `error#`, log.Lshortfile)
