@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/mmcdole/gofeed"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vvampirius/mygolibs/telegram"
 	"io"
 	"net/http"
@@ -24,7 +25,7 @@ func (core *Core) TelegramSend(method string, payload interface{}, onBlocked fun
 	statusCode, response, err := core.TelegramApi.Request(`sendMessage`, payload)
 	if err != nil {
 		ErrorLog.Println(err.Error())
-		// TODO: prometheus counter
+		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
 		return
 	}
 	if statusCode != 200 {
@@ -32,7 +33,7 @@ func (core *Core) TelegramSend(method string, payload interface{}, onBlocked fun
 			onBlocked()
 		}
 		ErrorLog.Println(statusCode, response.Description)
-		// TODO: prometheus counter
+		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
 		return
 	}
 }
@@ -46,6 +47,7 @@ func (core *Core) GetNewItems(items []*gofeed.Item) ([]*gofeed.Item, time.Time) 
 	for _, item := range items {
 		if item.PublishedParsed == nil {
 			ErrorLog.Println(`Can't parse`, item.PublishedParsed)
+			PrometheusErrors.With(prometheus.Labels{`action`: `get_item_date`}).Inc()
 			continue
 		}
 		if item.PublishedParsed.After(lastDate) {
@@ -80,12 +82,14 @@ func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
 	feed, err := parser.Parse(r.Body)
 	if err != nil {
 		ErrorLog.Println(err.Error())
+		PrometheusErrors.With(prometheus.Labels{`action`: `parse_rss`}).Inc()
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	go func() {
 		DebugLog.Println(`Last date:`, core.State.LastDate.Format("02.01 15:04:05 MST"))
 		items, newLastDate := core.GetNewItems(feed.Items)
+		PrometheusNewItems.Add(float64(len(items)))
 		for _, item := range core.ReverseItems(items) {
 			DebugLog.Printf("%s / %v %s %s\n", item.PublishedParsed.Format("02.01 15:04:05 MST"), item.Categories, item.Title, item.Link)
 			core.State.AddCategory(item.Categories...)
@@ -127,6 +131,7 @@ func (core *Core) GetUsers() ([]*User, error) {
 	items, err := os.ReadDir(path.Join(core.ConfigFile.Config.BaseDir, `users`))
 	if err != nil {
 		ErrorLog.Println(err.Error())
+		PrometheusErrors.With(prometheus.Labels{`action`: `get_users`}).Inc()
 		return nil, err
 	}
 	users := make([]*User, 0)
@@ -154,6 +159,7 @@ func (core *Core) SendItem(content, url string, categories []string) {
 			continue
 		}
 		DebugLog.Printf("send to @%s\n", user.Info.Username)
+		PrometheusSendItems.With(prometheus.Labels{`username`: user.Info.Username}).Inc()
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = user.Id()
 		message.Text = fmt.Sprintf("%v\n%s\n\n%s", categories, content, url)
@@ -172,12 +178,13 @@ func (core *Core) TelegramHttpHandler(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		ErrorLog.Println(err.Error())
+		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_handler`}).Inc()
 		return
 	}
 	update, err := telegram.UnmarshalUpdate(body)
 	if err != nil {
 		ErrorLog.Println(string(body), err.Error())
-		//core.Prometheus.Errors.With(prometheus.Labels{`situation`: `unmarshal_update`}).Inc()
+		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_handler`}).Inc()
 		return
 	}
 	if update.IsMessage() {
