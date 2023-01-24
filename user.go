@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vvampirius/mygolibs/telegram"
 	"gopkg.in/yaml.v2"
@@ -67,14 +68,31 @@ func (user *User) IsInExcludedCategories(categories ...string) bool {
 	return false
 }
 
-// func (user *User) AddCategory(category string) error {
-// if user.IsInCategories(category) {
-// ErrorLog.Println(`Already in`)
-// return errors.New(`Already in`)
-// }
-// user.ExcludedCategories = append(user.ExcludedCategories, category)
-// return user.Save()
-// }
+func (user *User) AddExcludedCategory(category string) error {
+	if user.IsInExcludedCategories(category) {
+		err := errors.New(`already in`)
+		ErrorLog.Println(err.Error())
+		return err
+	}
+	user.ExcludedCategories = append(user.ExcludedCategories, category)
+	return user.Save()
+}
+
+func (user *User) RemoveExcludedCategory(category string) error {
+	if !user.IsInExcludedCategories(category) {
+		err := errors.New(`not found`)
+		ErrorLog.Println(err.Error())
+		return err
+	}
+	newExcludedCategories := make([]string, 0)
+	for _, c := range user.ExcludedCategories {
+		if c != category {
+			newExcludedCategories = append(newExcludedCategories, c)
+		}
+	}
+	user.ExcludedCategories = newExcludedCategories
+	return user.Save()
+}
 
 func NewUser(path string) (*User, error) {
 	user := User{

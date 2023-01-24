@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -22,9 +23,12 @@ func (core *Core) TelegramSend(method string, payload interface{}, onBlocked fun
 	if method == `` {
 		method = `sendMessage`
 	}
-	statusCode, response, err := core.TelegramApi.Request(`sendMessage`, payload)
-	if err != nil {
-		ErrorLog.Println(err.Error())
+	statusCode, response, err := core.TelegramApi.Request(method, payload)
+	if err != nil &&
+		// https://core.telegram.org/bots/api#editmessagereplymarkup
+		// дурацкий API возвращает Result=true, если это было "inline message" 🤬
+		err.Error() != `json: cannot unmarshal bool into Go struct field RequestResponse.Result of type struct { Chat telegram.Chat; Date int; From telegram.User; MessageId int "json:\"message_id\""; Text string }` {
+		ErrorLog.Println(payload, err.Error())
 		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
 		return
 	}
@@ -179,22 +183,26 @@ func (core *Core) TelegramHttpHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ErrorLog.Println(err.Error())
 		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_handler`}).Inc()
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	update, err := telegram.UnmarshalUpdate(body)
 	if err != nil {
 		ErrorLog.Println(string(body), err.Error())
 		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_handler`}).Inc()
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	if update.IsMessage() {
-		go core.TelegramMessage(update)
-		return
-	}
-	//if update.IsCallbackQuery() {
-	//go core.TelegramCallback(update)
-	//return
-	//}
+	go func() {
+		if update.IsMessage() {
+			core.TelegramMessage(update)
+			return
+		}
+		if update.IsCallbackQuery() {
+			core.TelegramCallback(update)
+			return
+		}
+	}()
 }
 
 func (core *Core) RemoveUser(id int) error {
@@ -203,11 +211,32 @@ func (core *Core) RemoveUser(id int) error {
 		fmt.Sprintf("%d.yml", id)))
 }
 
+func (core *Core) GetCategoriesButtons(user *User) [][]telegram.InlineKeyboardButton {
+	buttons := make([][]telegram.InlineKeyboardButton, 0)
+	for _, category := range core.State.Categories {
+		if user.IsInExcludedCategories(category) {
+			buttons = append(buttons, []telegram.InlineKeyboardButton{{
+				Text:         fmt.Sprintf("⛔️%s", category),
+				CallbackData: fmt.Sprintf("include|%s", category),
+			}})
+			continue
+		}
+		buttons = append(buttons, []telegram.InlineKeyboardButton{{
+			Text:         fmt.Sprintf("🔶 %s", category),
+			CallbackData: fmt.Sprintf("exclude|%s", category),
+		}})
+	}
+	return buttons
+}
+
 func (core *Core) TelegramMessage(update telegram.Update) {
-	DebugLog.Println(update.Message.Text)
-	DebugLog.Println(update.Message.From)
+	DebugLog.Println(update.Message.From, update.Message.Text)
 	switch update.Message.Text {
 	case `/start`:
+		core.TelegramSend(`deleteMessage`, telegram.DeleteMessageInt{
+			ChatId:    update.Message.Chat.Id,
+			MessageId: update.Message.Id,
+		}, nil)
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = update.Message.From.Id
 		message.Text = `Бот находится в стадии разработки`
@@ -215,7 +244,62 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 			message.Text = fmt.Sprintf("%s\n\nОшибка: %s", message.Text, err.Error())
 		}
 		core.TelegramSend(``, message, nil)
+	case `/categories`:
+		user, err := core.GetOrCreateUser(update.Message.From)
+		if err != nil {
+			PrometheusErrors.With(prometheus.Labels{`action`: `get_user`}).Inc()
+			message := telegram.SendMessageIntWithoutReplyMarkup{}
+			message.ChatId = update.Message.From.Id
+			message.Text = `Извините, произошла ошибка.`
+			core.TelegramSend(``, message, nil)
+		}
+		core.TelegramSend(`deleteMessage`, telegram.DeleteMessageInt{
+			ChatId:    update.Message.Chat.Id,
+			MessageId: update.Message.Id,
+		}, nil)
+		payload := telegram.SendMessageIntWithInlineKeyboardMarkup{
+			ReplyMarkup: telegram.InlineKeyboardMarkup{
+				InlineKeyboard: core.GetCategoriesButtons(user),
+			},
+		}
+		payload.Text = `Категории:`
+		payload.ChatId = update.Message.From.Id
+		core.TelegramSend(``, payload, nil)
 	}
+}
+
+func (core *Core) TelegramCallback(update telegram.Update) {
+	user, err := core.GetUser(update.CallbackQuery.Message.Chat.Id)
+	if err != nil {
+		ErrorLog.Println(err.Error())
+		PrometheusErrors.With(prometheus.Labels{`action`: `get_user`}).Inc()
+		return
+	}
+	command := strings.Split(update.CallbackQuery.Data, `|`)
+	switch command[0] {
+	case `include`:
+		DebugLog.Printf("@%s want to include: %s\n", user.Info.Username, command[1])
+		if err := user.RemoveExcludedCategory(command[1]); err != nil {
+			ErrorLog.Println(err.Error())
+			PrometheusErrors.With(prometheus.Labels{`action`: `include`}).Inc()
+			return
+		}
+	case `exclude`:
+		DebugLog.Printf("@%s want to exclude: %s\n", user.Info.Username, command[1])
+		if err := user.AddExcludedCategory(command[1]); err != nil {
+			ErrorLog.Println(err.Error())
+			PrometheusErrors.With(prometheus.Labels{`action`: `exclude`}).Inc()
+			return
+		}
+	}
+	payload := telegram.EditMessageIntInlineKeyboardMarkup{
+		ChatId:    update.CallbackQuery.Message.Chat.Id,
+		MessageId: update.CallbackQuery.Message.Id,
+		ReplyMarkup: telegram.InlineKeyboardMarkup{
+			InlineKeyboard: core.GetCategoriesButtons(user),
+		},
+	}
+	core.TelegramSend(`editMessageReplyMarkup`, payload, nil)
 }
 
 func NewCore(configFile *ConfigFile, telegramApi *telegram.Api, state *State) (*Core, error) {
