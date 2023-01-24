@@ -19,29 +19,6 @@ type Core struct {
 	State       *State
 }
 
-func (core *Core) TelegramSend(method string, payload interface{}, onBlocked func()) {
-	if method == `` {
-		method = `sendMessage`
-	}
-	statusCode, response, err := core.TelegramApi.Request(method, payload)
-	if err != nil &&
-		// https://core.telegram.org/bots/api#editmessagereplymarkup
-		// дурацкий API возвращает Result=true, если это было "inline message" 🤬
-		err.Error() != `json: cannot unmarshal bool into Go struct field RequestResponse.Result of type struct { Chat telegram.Chat; Date int; From telegram.User; MessageId int "json:\"message_id\""; Text string }` {
-		ErrorLog.Println(payload, err.Error())
-		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
-		return
-	}
-	if statusCode != 200 {
-		if statusCode == 403 && response.Description == `Forbidden: bot was blocked by the user` && onBlocked != nil {
-			onBlocked()
-		}
-		ErrorLog.Println(statusCode, response.Description)
-		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
-		return
-	}
-}
-
 // GetNewItems возвращает список новых итемов относительно core.State.LastDate и последнее время побликации из них (если
 // новых нет - будет IsZero).
 func (core *Core) GetNewItems(items []*gofeed.Item) ([]*gofeed.Item, time.Time) {
@@ -167,7 +144,9 @@ func (core *Core) SendItem(content, url string, categories []string) {
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = user.Id()
 		message.Text = fmt.Sprintf("%v\n%s\n\n%s", categories, content, url)
-		core.TelegramSend(``, message, func() { core.RemoveUser(user.Id()) })
+		if err := core.TelegramApi.RequestWrapper(``, message, func() { core.RemoveUser(user.Id()) }); err != nil {
+			PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -233,7 +212,7 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 	DebugLog.Println(update.Message.From, update.Message.Text)
 	switch update.Message.Text {
 	case `/start`:
-		core.TelegramSend(`deleteMessage`, telegram.DeleteMessageInt{
+		core.TelegramApi.RequestWrapper(`deleteMessage`, telegram.DeleteMessageInt{
 			ChatId:    update.Message.Chat.Id,
 			MessageId: update.Message.Id,
 		}, nil)
@@ -243,7 +222,9 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 		if _, err := core.GetOrCreateUser(update.Message.From); err != nil {
 			message.Text = fmt.Sprintf("%s\n\nОшибка: %s", message.Text, err.Error())
 		}
-		core.TelegramSend(``, message, nil)
+		if err := core.TelegramApi.RequestWrapper(``, message, nil); err != nil {
+			PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+		}
 	case `/categories`:
 		user, err := core.GetOrCreateUser(update.Message.From)
 		if err != nil {
@@ -251,9 +232,11 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 			message := telegram.SendMessageIntWithoutReplyMarkup{}
 			message.ChatId = update.Message.From.Id
 			message.Text = `Извините, произошла ошибка.`
-			core.TelegramSend(``, message, nil)
+			if err := core.TelegramApi.RequestWrapper(``, message, nil); err != nil {
+				PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+			}
 		}
-		core.TelegramSend(`deleteMessage`, telegram.DeleteMessageInt{
+		core.TelegramApi.RequestWrapper(`deleteMessage`, telegram.DeleteMessageInt{
 			ChatId:    update.Message.Chat.Id,
 			MessageId: update.Message.Id,
 		}, nil)
@@ -264,7 +247,9 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 		}
 		payload.Text = `Категории:`
 		payload.ChatId = update.Message.From.Id
-		core.TelegramSend(``, payload, nil)
+		if err := core.TelegramApi.RequestWrapper(``, payload, nil); err != nil {
+			PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+		}
 	}
 }
 
@@ -299,7 +284,9 @@ func (core *Core) TelegramCallback(update telegram.Update) {
 			InlineKeyboard: core.GetCategoriesButtons(user),
 		},
 	}
-	core.TelegramSend(`editMessageReplyMarkup`, payload, nil)
+	if err := core.TelegramApi.RequestWrapper(`editMessageReplyMarkup`, payload, nil); err != nil {
+		PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+	}
 }
 
 func NewCore(configFile *ConfigFile, telegramApi *telegram.Api, state *State) (*Core, error) {

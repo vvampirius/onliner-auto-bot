@@ -12,7 +12,7 @@ import (
 	"path"
 )
 
-const VERSION = `0.3`
+const VERSION = `0.3.1`
 
 var (
 	ErrorLog         = log.New(os.Stderr, `error#`, log.Lshortfile)
@@ -82,6 +82,8 @@ func main() {
 	DebugLog.Printf("Callback URL set to '%s'\n", configFile.Config.Telegram.Webhook)
 
 	telegramApi := telegram.NewApi(configFile.Config.Telegram.Token)
+	telegramApi.ErrorLog = ErrorLog
+	telegramApi.DebugLog = DebugLog
 
 	state, err := NewState(path.Join(configFile.Config.BaseDir, `state.yml`))
 	if err != nil {
