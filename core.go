@@ -129,6 +129,17 @@ func (core *Core) GetUsers() ([]*User, error) {
 	return users, err
 }
 
+func (core *Core) CategoriesToTagsString(categories []string) string {
+	s := ``
+	for i, category := range categories {
+		if i != 0 {
+			s = s + ` `
+		}
+		s = s + `#` + strings.ReplaceAll(category, ` `, `_`)
+	}
+	return s
+}
+
 func (core *Core) SendItem(content, url string, categories []string) {
 	users, err := core.GetUsers()
 	if err != nil {
@@ -141,9 +152,13 @@ func (core *Core) SendItem(content, url string, categories []string) {
 		}
 		DebugLog.Printf("send to @%s\n", user.Info.Username)
 		PrometheusSendItems.With(prometheus.Labels{`username`: user.Info.Username}).Inc()
+		msgText := url
+		if tags := core.CategoriesToTagsString(categories); tags != `` {
+			msgText = tags + "\n\n" + msgText
+		}
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = user.Id()
-		message.Text = fmt.Sprintf("%v\n%s\n\n%s", categories, content, url)
+		message.Text = msgText
 		if err := core.TelegramApi.RequestWrapper(``, message, func() { core.RemoveUser(user.Id()) }); err != nil {
 			PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
 		}
