@@ -135,7 +135,9 @@ func (core *Core) CategoriesToTagsString(categories []string) string {
 		if i != 0 {
 			s = s + ` `
 		}
-		s = s + `#` + strings.ReplaceAll(category, ` `, `_`)
+		category = strings.ReplaceAll(category, ` `, `_`)
+		category = strings.ReplaceAll(category, `-`, `_`)
+		s = s + `#` + category
 	}
 	return s
 }
