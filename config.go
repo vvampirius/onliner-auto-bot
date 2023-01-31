@@ -6,5 +6,6 @@ type Config struct {
 		Token   string
 		Webhook string
 	}
-	BaseDir string `yaml:"base_dir"`
+	BaseDir      string `yaml:"base_dir"`
+	StartMessage string `yaml:"start_message"`
 }

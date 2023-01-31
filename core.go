@@ -233,12 +233,14 @@ func (core *Core) TelegramMessage(update telegram.Update) {
 		}, nil)
 		message := telegram.SendMessageIntWithoutReplyMarkup{}
 		message.ChatId = update.Message.From.Id
-		message.Text = `Бот находится в стадии разработки`
+		message.Text = core.ConfigFile.Config.StartMessage
 		if _, err := core.GetOrCreateUser(update.Message.From); err != nil {
 			message.Text = fmt.Sprintf("%s\n\nОшибка: %s", message.Text, err.Error())
 		}
-		if err := core.TelegramApi.RequestWrapper(``, message, nil); err != nil {
-			PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+		if message.Text != `` {
+			if err := core.TelegramApi.RequestWrapper(``, message, nil); err != nil {
+				PrometheusErrors.With(prometheus.Labels{`action`: `telegram_request`}).Inc()
+			}
 		}
 	case `/categories`:
 		user, err := core.GetOrCreateUser(update.Message.From)
