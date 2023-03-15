@@ -72,9 +72,10 @@ func (core *Core) RssHttpHandler(w http.ResponseWriter, r *http.Request) {
 		items, newLastDate := core.GetNewItems(feed.Items)
 		PrometheusNewItems.Add(float64(len(items)))
 		for _, item := range core.ReverseItems(items) {
-			DebugLog.Printf("%s / %v %s %s\n", item.PublishedParsed.Format("02.01 15:04:05 MST"), item.Categories, item.Title, item.Link)
-			core.State.AddCategory(item.Categories...)
-			core.SendItem(item.Title, item.Link, item.Categories)
+			categories := diveIntoCategories(item.Categories)
+			DebugLog.Printf("%s / %v %s %s\n", item.PublishedParsed.Format("02.01 15:04:05 MST"), categories, item.Title, item.Link)
+			core.State.AddCategory(categories...)
+			core.SendItem(item.Title, item.Link, categories)
 		}
 		if newLastDate.After(core.State.LastDate) {
 			core.State.LastDate = newLastDate
@@ -149,11 +150,11 @@ func (core *Core) SendItem(content, url string, categories []string) {
 	}
 	for _, user := range users {
 		if user.IsInExcludedCategories(categories...) {
-			DebugLog.Printf("skip for @%s\n", user.Info.Username)
+			DebugLog.Printf("skip for %s\n", user.Name())
 			continue
 		}
-		DebugLog.Printf("send to @%s\n", user.Info.Username)
-		PrometheusSendItems.With(prometheus.Labels{`username`: user.Info.Username}).Inc()
+		DebugLog.Printf("send to %s\n", user.Name())
+		PrometheusSendItems.With(prometheus.Labels{`username`: user.Name()}).Inc()
 		msgText := url
 		if tags := core.CategoriesToTagsString(categories); tags != `` {
 			msgText = tags + "\n\n" + msgText
@@ -282,14 +283,14 @@ func (core *Core) TelegramCallback(update telegram.Update) {
 	command := strings.Split(update.CallbackQuery.Data, `|`)
 	switch command[0] {
 	case `include`:
-		DebugLog.Printf("@%s want to include: %s\n", user.Info.Username, command[1])
+		DebugLog.Printf("%s want to include: %s\n", user.Name(), command[1])
 		if err := user.RemoveExcludedCategory(command[1]); err != nil {
 			ErrorLog.Println(err.Error())
 			PrometheusErrors.With(prometheus.Labels{`action`: `include`}).Inc()
 			return
 		}
 	case `exclude`:
-		DebugLog.Printf("@%s want to exclude: %s\n", user.Info.Username, command[1])
+		DebugLog.Printf("%s want to exclude: %s\n", user.Name(), command[1])
 		if err := user.AddExcludedCategory(command[1]); err != nil {
 			ErrorLog.Println(err.Error())
 			PrometheusErrors.With(prometheus.Labels{`action`: `exclude`}).Inc()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vvampirius/mygolibs/telegram"
 	"gopkg.in/yaml.v2"
@@ -19,6 +20,20 @@ type User struct {
 
 func (user *User) Id() int {
 	return user.Info.Id
+}
+
+func (user *User) Name() string {
+	if user.Info.Username != `` {
+		return `@` + user.Info.Username
+	}
+	if user.Info.FirstName != `` {
+		name := user.Info.FirstName
+		if user.Info.LastName != `` {
+			name = name + ` ` + user.Info.LastName
+		}
+		return name
+	}
+	return fmt.Sprintf("%d", user.Id())
 }
 
 func (user *User) Load() error {
